@@ -198,15 +198,33 @@ final class SubresourceDataProvider implements SubresourceDataProviderInterface
                 ->from($identifierResourceClass, $alias);
         }
 
-        // Add where clause for identifiers
-        foreach ($normalizedIdentifiers as $key => $value) {
-            $placeholder = $queryNameGenerator->generateParameterName($key);
-            $qb->andWhere("$alias.$key = :$placeholder");
-            $topQueryBuilder->setParameter($placeholder, $value, (string) $classMetadata->getTypeOfField($key));
+        $lastIdentifier = $remainingIdentifiers === 1;
+
+        if (!$lastIdentifier) {
+            // Add where clause for identifiers
+            foreach ($normalizedIdentifiers as $key => $value) {
+                $placeholder = $queryNameGenerator->generateParameterName($key);
+                $qb->andWhere("$alias.$key = :$placeholder");
+                $topQueryBuilder->setParameter($placeholder, $value, (string)$classMetadata->getTypeOfField($key));
+            }
         }
 
         // Recurse queries
         $qb = $this->buildQuery($identifiers, $context, $queryNameGenerator, $qb, $alias, --$remainingIdentifiers, $topQueryBuilder);
+
+        // Try to optimize for non-recursive (1 level deep) subqueries
+        if ($lastIdentifier) {
+            // Add where clause for identifiers, but not via a WHERE ... IN ( ...subquery... ). Instead we use
+            // a direct identifier equality clause, to speed thing up when dealing with large tables.
+            // We may do so as there is no more recursion levels from here.
+            foreach ($normalizedIdentifiers as $key => $value) {
+                $placeholder = $queryNameGenerator->generateParameterName($key);
+                $previousQueryBuilder->andWhere("IDENTITY($previousAlias) = :$placeholder");
+                $previousQueryBuilder->setParameter($placeholder, $value, (string) $classMetadata->getTypeOfField($key));
+            }
+
+            return $previousQueryBuilder;
+        }
 
         return $previousQueryBuilder->andWhere($qb->expr()->in($previousAlias, $qb->getDQL()));
     }
